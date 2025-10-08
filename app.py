@@ -2,7 +2,7 @@ import os
 import requests
 import json
 import threading
-import time # <- الجديد
+import time
 from flask import Flask, request, redirect, url_for, render_template, send_from_directory, Response, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
@@ -23,8 +23,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-# **الجديد: قاموس عالمي لتتبع حالة التحميل بالبايت في الذاكرة**
-# يستخدم لتجنب الكتابة المتكررة على قاعدة البيانات
+# قاموس عالمي لتتبع حالة التحميل بالبايت في الذاكرة
 DOWNLOAD_STATE = {}
 
 # تعريف نموذج قاعدة البيانات لملفات الفيديو
@@ -34,19 +33,70 @@ class Video(db.Model):
     title = db.Column(db.String(100), nullable=False)
     progress = db.Column(db.Integer, default=0)    # 0: قيد الإعداد، 100: اكتمل، -1: خطأ
     total_size = db.Column(db.Integer, default=0) # لتخزين حجم الملف بالبايت
-    start_time = db.Column(db.Float, nullable=True) # <- وقت بدء التحميل الفعلي
+    start_time = db.Column(db.Float, nullable=True) # وقت بدء التحميل الفعلي
 
 # إنشاء الجداول عند بدء التشغيل
 with app.app_context():
     db.create_all()
 
-# --- وظائف المساعدة ---
+# --- وظائف المساعدة (المعدلة) ---
 
 def get_video_list():
     """يحضر قائمة كل الفيديوهات من قاعدة البيانات"""
     return Video.query.order_by(Video.id.desc()).all()
 
-def download_file_from_url(url, folder, video_id):
+def parse_cookies(cookie_string):
+    """
+    تحويل سلسلة الكوكيز (التي قد تكون بتنسيق HTTP أو Netscape) إلى قاموس Python.
+    المدخل: 'key1=value1; key2=value2' أو محتوى ملف Netscape
+    المخرج: {'key1': 'value1', 'key2': 'value2'}
+    """
+    cookies = {}
+    if not cookie_string:
+        return cookies
+
+    # محاولة معالجة التنسيق البسيط (HTTP Header style)
+    # إذا كان يحتوي على ;، نفترض أنه تنسيق بسيط في البداية
+    if ';' in cookie_string and '\n' not in cookie_string:
+        try:
+            for pair in cookie_string.split(';'):
+                if '=' in pair:
+                    key, value = pair.split('=', 1)
+                    cookies[key.strip()] = value.strip()
+            if cookies:
+                return cookies
+        except:
+            pass # في حالة الفشل، نواصل محاولة المعالجة كتنسيق ملف
+
+    # معالجة تنسيق ملف Netscape أو قوائم key=value مفصولة بأسطر
+    for line in cookie_string.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        
+        if '\t' in line:
+            # تنسيق Netscape: domain	flag	path	secure	expiration	name	value
+            parts = line.split('\t')
+            if len(parts) >= 7:
+                name = parts[5].strip()
+                value = parts[6].strip()
+                if name and value:
+                    cookies[name] = value
+        
+        elif '=' in line:
+            # تنسيق key=value بسيط
+            try:
+                key, value = line.split('=', 1)
+                # إزالة أي شيء بعد أول ; إذا كان هناك (مثل ;domain=...)
+                value_clean = value.strip().split(';')[0]
+                cookies[key.strip()] = value_clean
+            except:
+                continue
+
+    return cookies
+
+
+def download_file_from_url(url, folder, video_id, cookies_dict=None): # <--- تعديل: إضافة وسيطة cookies_dict
     """يحمل الملف من رابط مباشر ويحفظه، ويحدث الذاكرة فقط أثناء التحميل"""
     global DOWNLOAD_STATE
     
@@ -57,7 +107,13 @@ def download_file_from_url(url, folder, video_id):
             return
 
         try:
-            response = requests.get(url, stream=True, timeout=300) 
+            # **التعديل هنا:** تمرير قاموس الكوكيز إلى الطلب
+            response = requests.get(
+                url, 
+                stream=True, 
+                timeout=300, 
+                cookies=cookies_dict if cookies_dict else {}
+            ) 
             response.raise_for_status()
             
             total_size = int(response.headers.get('content-length', 0))
@@ -69,7 +125,7 @@ def download_file_from_url(url, folder, video_id):
             file_path = os.path.join(folder, filename)
             downloaded_size = 0
             
-            # **1. Commit للمعلومات الأساسية مرة واحدة**
+            # 1. Commit للمعلومات الأساسية مرة واحدة
             video.filename = filename
             video.total_size = total_size
             video.progress = 1 # تغيير الحالة إلى 'بدأ التحميل فعلياً'
@@ -78,27 +134,25 @@ def download_file_from_url(url, folder, video_id):
             # الحفظ بشكل مجزأ وتحديث الذاكرة
             with open(file_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
-                    # التأكد من عدم وجود خطأ خارجي (من مسار الحذف مثلاً)
                     if video.progress == -1: break 
                     
                     f.write(chunk)
                     downloaded_size += len(chunk)
                     
-                    # **الجديد: تحديث الذاكرة فقط في كل خطوة (لتجنب Commit)**
+                    # تحديث الذاكرة فقط في كل خطوة
                     DOWNLOAD_STATE[video_id] = downloaded_size 
 
-            # **2. Commit نهائي عند الانتهاء**
+            # 2. Commit نهائي عند الانتهاء
             if video.progress != -1:
                 video.progress = 100
                 db.session.commit()
             
-            # تنظيف الذاكرة بعد الانتهاء (سواء نجاح أو فشل)
+            # تنظيف الذاكرة بعد الانتهاء
             if video_id in DOWNLOAD_STATE:
                 del DOWNLOAD_STATE[video_id]
 
         except requests.exceptions.RequestException as e:
             print(f"Error downloading video ID {video_id}: {e}")
-            # تعيين التقدم إلى -1 للدلالة على وجود خطأ
             video.progress = -1
             video.filename = None 
             db.session.commit()
@@ -111,7 +165,7 @@ def download_file_from_url(url, folder, video_id):
             if video_id in DOWNLOAD_STATE: del DOWNLOAD_STATE[video_id]
 
 
-# --- الـ Routes (المسارات) ---
+# --- الـ Routes (المسارات) (المعدلة) ---
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -121,8 +175,13 @@ def index():
     if request.method == 'POST':
         video_url = request.form.get('video_url')
         video_title = request.form.get('video_title', 'فيديو جديد')
+        cookies_str = request.form.get('cookies_data', '') # <--- جديد: استلام بيانات الكوكيز
 
         if video_url:
+            
+            # تحويل سلسلة الكوكيز إلى قاموس
+            cookies_dict = parse_cookies(cookies_str)
+            
             # 1. إنشاء إدخال مؤقت في قاعدة البيانات وتسجيل وقت البدء
             current_time = time.time()
             new_video = Video(
@@ -130,16 +189,19 @@ def index():
                 progress=0, 
                 filename=None, 
                 total_size=0,
-                start_time=current_time # <- تسجيل وقت البدء
+                start_time=current_time 
             )
             db.session.add(new_video)
             db.session.commit()
             
-            # **تهيئة حالة التحميل في الذاكرة (0 بايت)**
+            # تهيئة حالة التحميل في الذاكرة
             DOWNLOAD_STATE[new_video.id] = 0
             
-            # 2. تشغيل عملية التحميل في خلفية منفصلة
-            threading.Thread(target=download_file_from_url, args=(video_url, app.config['UPLOAD_FOLDER'], new_video.id)).start()
+            # 2. تشغيل عملية التحميل في خلفية منفصلة مع تمرير الكوكيز
+            threading.Thread(
+                target=download_file_from_url, 
+                args=(video_url, app.config['UPLOAD_FOLDER'], new_video.id, cookies_dict) # <--- تعديل: تمرير cookies_dict
+            ).start()
 
             return redirect(url_for('index', started_download=new_video.id))
 
@@ -155,7 +217,6 @@ def download_status(video_id):
     if video:
         progress_db = video.progress
         
-        # إذا كان التحميل مكتمل أو حدث خطأ، اعتمد على حالة قاعدة البيانات
         if progress_db == 100 or progress_db == -1:
             return jsonify({
                 'progress': progress_db,
@@ -168,7 +229,7 @@ def download_status(video_id):
 
         # --- حساب السرعة والوقت التقديري (بناءً على الذاكرة) ---
         
-        downloaded_size = DOWNLOAD_STATE.get(video_id, 0) # الحجم المحمل من الذاكرة
+        downloaded_size = DOWNLOAD_STATE.get(video_id, 0) 
         total_size = video.total_size
         start_time = video.start_time
         
@@ -180,19 +241,15 @@ def download_status(video_id):
             elapsed_time = time.time() - start_time
             
             if elapsed_time > 0 and downloaded_size > 0:
-                # 1. حساب التقدم التقديري
                 progress_estimate = int((downloaded_size / total_size) * 100)
-                
-                # 2. حساب السرعة
                 speed_bps = downloaded_size / elapsed_time
                 speed_kbps = round(speed_bps / 1024, 2)
                 
-                # 3. حساب الوقت المتبقي (ETA)
                 remaining_size = total_size - downloaded_size
                 if speed_bps > 0:
                     eta_seconds = remaining_size / speed_bps
 
-        # --- إرجاع النتائج التقديرية (Progress يأتي من الحساب وليس من DB) ---
+        # --- إرجاع النتائج التقديرية ---
         return jsonify({
             'progress': progress_estimate, 
             'title': video.title,
@@ -211,28 +268,23 @@ def stream(video_id):
     """مسار لتشغيل الفيديو في المتصفح (مع Range Headers لـ Streaming سريع)"""
     video = Video.query.get_or_404(video_id)
     
-    # يجب أن يكون التحميل قد اكتمل لكي يكون هناك اسم ملف
     if not video.filename or video.progress != 100:
         return "Video not ready for streaming.", 404
         
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], video.filename)
     
     if not os.path.exists(file_path):
-        # حذف الإدخال من DB إذا كان الملف غير موجود
         db.session.delete(video)
         db.session.commit()
         return "Video file not found. It might have been deleted from the server.", 404
 
-    # تنفيذ HTTP Range Streaming
     range_header = request.headers.get('Range', None)
     if not range_header:
-        # إذا لم يكن هناك Range Header، إرسال الملف بالكامل (للمشغلين القدامى)
         return send_from_directory(app.config['UPLOAD_FOLDER'], video.filename, mimetype=mimetypes.guess_type(video.filename)[0])
 
     size = os.path.getsize(file_path)
     byte1, byte2 = 0, size - 1
 
-    # تحليل الـ Range Header
     m = range_header.replace('bytes=', '').split('-')
     try:
         byte1 = int(m[0])
@@ -249,7 +301,7 @@ def stream(video_id):
 
     rv = Response(
         data,
-        206, # 206 Partial Content هو الكود المطلوب للـ streaming
+        206, 
         mimetype=mimetypes.guess_type(video.filename)[0],
         direct_passthrough=True
     )
@@ -276,21 +328,17 @@ def delete_video(video_id):
     video = Video.query.get_or_404(video_id)
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], video.filename)
     
-    # تنظيف حالة التحميل من الذاكرة إذا كان التحميل جارياً
     if video_id in DOWNLOAD_STATE:
         del DOWNLOAD_STATE[video_id]
     
-    # وضع progress=-1 كإشارة لـ Thread الخلفي بالتوقف
     if video.progress < 100 and video.progress != -1:
         video.progress = -1
         db.session.commit()
 
     try:
-        # 1. حذف الملف من التخزين
         if video.filename and os.path.exists(file_path):
             os.remove(file_path)
         
-        # 2. حذف الإدخال من قاعدة البيانات
         db.session.delete(video)
         db.session.commit()
 
