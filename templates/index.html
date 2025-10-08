@@ -14,12 +14,21 @@
         ul { list-style: none; padding: 0; }
         li { background: #e9ecef; margin-bottom: 10px; padding: 15px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
         .progress-bar { height: 25px; background-color: #ddd; border-radius: 4px; width: 350px; text-align: right; overflow: hidden; position: relative; }
-        .progress-bar-inner { height: 100%; background-color: #007bff; text-align: center; color: white; line-height: 25px; transition: width 0.5s; direction: ltr; /* للحفاظ على تنسيق الأرقام والـ KB/s */ }
+        .progress-bar-inner { 
+            height: 100%; 
+            background-color: #007bff; 
+            text-align: center; 
+            color: white; 
+            line-height: 25px; 
+            transition: width 0.5s; 
+            direction: ltr; /* للحفاظ على تنسيق الأرقام والـ KB/s */ 
+            white-space: nowrap;
+        }
         .actions a, .actions button { padding: 5px 10px; border-radius: 4px; text-decoration: none; color: white; margin-right: 5px; border: none; cursor: pointer; }
         .actions .play { background-color: #007bff; }
         .actions .delete { background-color: #dc3545; }
         .error { color: #dc3545; font-weight: bold; }
-        /* لتغطية النص الطويل داخل شريط التقدم */
+        /* لتوسيط النص داخل شريط التقدم */
         .progress-bar-inner span { margin: 0 5px; } 
     </style>
 </head>
@@ -53,8 +62,8 @@
                             </form>
                         {% else %}
                             <div class="progress-bar" id="progress-bar-{{ video.id }}">
-                                <div class="progress-bar-inner" style="width: {{ video.progress }}%;" data-progress="{{ video.progress }}">
-                                    <span>{{ video.progress }}% جاري...</span>
+                                <div class="progress-bar-inner" style="width: 0%;" data-progress="{{ video.progress }}">
+                                    <span>0% جاري...</span>
                                 </div>
                             </div>
                         {% endif %}
@@ -102,22 +111,32 @@
                     const actionsArea = listItem.querySelector('.actions');
                     
                     if (progress >= 0 && progress < 100) {
-                        // تحديث شريط التقدم التقديري
+                        // 1. تحديث شريط التقدم التقديري
                         const innerBar = progressBar.querySelector('.progress-bar-inner');
                         
                         // نستخدم التقدير من الذاكرة
                         innerBar.style.width = progress + '%';
                         
-                        // عرض السرعة والوقت التقديري
+                        // 2. عرض السرعة والوقت التقديري
                         const speedText = data.speed_kbps > 0 ? `${data.speed_kbps.toFixed(2)} KB/s` : 'جاري البدء...';
                         const etaText = data.eta_seconds !== null ? ` | متبقي: ${formatETA(data.eta_seconds)}` : '';
                         
                         innerBar.innerHTML = `<span>${progress}% (${speedText}${etaText})</span>`;
 
-                        setTimeout(() => updateStatus(videoId), 1000); // تحديث كل ثانية
+                        // 3. استمرار التحديث كل ثانية
+                        setTimeout(() => updateStatus(videoId), 1000); 
                     } else if (progress === 100 && data.file_ready) {
-                        // حالة: اكتمل التحميل (تحديث الواجهة للتشغيل)
+                        // حالة: اكتمل التحميل 
+                        
+                        // التأكد من إظهار 100% في الشريط قبل إزالته
+                        const innerBar = progressBar.querySelector('.progress-bar-inner');
+                        innerBar.style.width = '100%';
+                        innerBar.innerHTML = `<span>100% اكتمل</span>`;
+                        
+                        // إزالة شريط التقدم واستبداله بحالة "جاهز"
                         statusArea.innerHTML = '<span style="color: green;">✓ جاهز للتشغيل</span>';
+                        
+                        // إظهار أزرار التشغيل والحذف
                         actionsArea.innerHTML = '<a href="/play/' + videoId + '" class="play">تشغيل</a>' +
                             '<form method="POST" action="/delete/' + videoId + '" style="display:inline;">' +
                             '<button type="submit" class="delete" onclick="return confirm(\'هل أنت متأكد من حذف الملف والفيديو؟\')">حذف</button>' +
