@@ -13,12 +13,14 @@
         input[type="submit"]:hover { background-color: #218838; }
         ul { list-style: none; padding: 0; }
         li { background: #e9ecef; margin-bottom: 10px; padding: 15px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
-        .progress-bar { height: 20px; background-color: #ddd; border-radius: 4px; width: 150px; text-align: right; overflow: hidden; }
-        .progress-bar-inner { height: 100%; background-color: #007bff; text-align: center; color: white; line-height: 20px; transition: width 0.5s; }
+        .progress-bar { height: 25px; background-color: #ddd; border-radius: 4px; width: 350px; text-align: right; overflow: hidden; position: relative; }
+        .progress-bar-inner { height: 100%; background-color: #007bff; text-align: center; color: white; line-height: 25px; transition: width 0.5s; direction: ltr; /* للحفاظ على تنسيق الأرقام والـ KB/s */ }
         .actions a, .actions button { padding: 5px 10px; border-radius: 4px; text-decoration: none; color: white; margin-right: 5px; border: none; cursor: pointer; }
         .actions .play { background-color: #007bff; }
         .actions .delete { background-color: #dc3545; }
         .error { color: #dc3545; font-weight: bold; }
+        /* لتغطية النص الطويل داخل شريط التقدم */
+        .progress-bar-inner span { margin: 0 5px; } 
     </style>
 </head>
 <body>
@@ -52,7 +54,7 @@
                         {% else %}
                             <div class="progress-bar" id="progress-bar-{{ video.id }}">
                                 <div class="progress-bar-inner" style="width: {{ video.progress }}%;" data-progress="{{ video.progress }}">
-                                    {{ video.progress }}%
+                                    <span>{{ video.progress }}% جاري...</span>
                                 </div>
                             </div>
                         {% endif %}
@@ -71,6 +73,20 @@
     </div>
 
     <script>
+        // وظيفة لتحويل الثواني إلى تنسيق HH:MM:SS
+        function formatETA(seconds) {
+            if (seconds === null || seconds === undefined) return 'يُحسب...';
+            if (seconds < 0) return '00:00';
+            
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            
+            const parts = [h, m, s].map(v => v.toString().padStart(2, '0'));
+            
+            return (h > 0 ? parts[0] + ':' : '') + parts[1] + ':' + parts[2];
+        }
+
         // وظيفة لتحديث حالة فيديو واحد
         function updateStatus(videoId) {
             fetch('/status/' + videoId)
@@ -79,28 +95,26 @@
                     const progressBar = document.getElementById('progress-bar-' + videoId);
                     const listItem = document.getElementById('video-item-' + videoId);
 
-                    if (!listItem || data.error) return; // تم حذف العنصر أو حدث خطأ
+                    if (!listItem || data.error) return; 
 
                     const progress = data.progress;
                     const statusArea = listItem.querySelector('.status-area');
                     const actionsArea = listItem.querySelector('.actions');
                     
                     if (progress >= 0 && progress < 100) {
-                        // تحديث شريط التقدم إذا كان التحميل مستمراً
+                        // تحديث شريط التقدم التقديري
                         const innerBar = progressBar.querySelector('.progress-bar-inner');
+                        
+                        // نستخدم التقدير من الذاكرة
                         innerBar.style.width = progress + '%';
-                        innerBar.textContent = progress + '%';
-                        setTimeout(() => updateStatus(videoId), 2000); // استمر في التحديث
-                    } else if (progress === 100 && !data.file_ready) {
-                         // حالة: اكتمل التحميل في DB لكن لم يتم تحديث الواجهة بعد
-                        location.reload(); 
-                    } else if (progress === -1) {
-                        // حالة: خطأ في التحميل
-                        listItem.querySelector('.status-area').innerHTML = '<span class="error">❌ خطأ في التحميل!</span>' +
-                            '<form method="POST" action="/delete/' + videoId + '" style="display:inline;">' +
-                            '<button type="submit" class="delete" onclick="return confirm(\'هل أنت متأكد من الحذف؟\')">حذف السجل</button>' +
-                            '</form>';
-                        listItem.querySelector('.actions').innerHTML = ''; // إزالة أزرار التشغيل
+                        
+                        // عرض السرعة والوقت التقديري
+                        const speedText = data.speed_kbps > 0 ? `${data.speed_kbps.toFixed(2)} KB/s` : 'جاري البدء...';
+                        const etaText = data.eta_seconds !== null ? ` | متبقي: ${formatETA(data.eta_seconds)}` : '';
+                        
+                        innerBar.innerHTML = `<span>${progress}% (${speedText}${etaText})</span>`;
+
+                        setTimeout(() => updateStatus(videoId), 1000); // تحديث كل ثانية
                     } else if (progress === 100 && data.file_ready) {
                         // حالة: اكتمل التحميل (تحديث الواجهة للتشغيل)
                         statusArea.innerHTML = '<span style="color: green;">✓ جاهز للتشغيل</span>';
@@ -108,6 +122,13 @@
                             '<form method="POST" action="/delete/' + videoId + '" style="display:inline;">' +
                             '<button type="submit" class="delete" onclick="return confirm(\'هل أنت متأكد من حذف الملف والفيديو؟\')">حذف</button>' +
                             '</form>';
+                    } else if (progress === -1) {
+                        // حالة: خطأ في التحميل
+                        listItem.querySelector('.status-area').innerHTML = '<span class="error">❌ خطأ في التحميل!</span>' +
+                            '<form method="POST" action="/delete/' + videoId + '" style="display:inline;">' +
+                            '<button type="submit" class="delete" onclick="return confirm(\'هل أنت متأكد من الحذف؟\')">حذف السجل</button>' +
+                            '</form>';
+                        listItem.querySelector('.actions').innerHTML = ''; 
                     }
                 })
                 .catch(error => console.error('Error fetching status for ID ' + videoId, error));
