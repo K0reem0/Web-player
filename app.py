@@ -1,13 +1,15 @@
 import os
 import requests
-from flask import Flask, request, redirect, url_for, render_template, send_from_directory, abort, Response
+import json
+import threading
+from flask import Flask, request, redirect, url_for, render_template, send_from_directory, Response, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 import mimetypes
 
 # تهيئة Flask والتكوين
 app = Flask(__name__)
-# تكوين قاعدة بيانات SQLite. (للتذكير: لن تعمل للتخزين الدائم على Heroku)
+# تكوين قاعدة بيانات SQLite. (للتذكير: التخزين غير دائم على Heroku)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///videos.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
@@ -20,11 +22,13 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-# تعريف نموذج قاعدة البيانات لملفات الفيديو
+# تعريف نموذج قاعدة البيانات لملفات الفيديو (تم إضافة progress و total_size)
 class Video(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    filename = db.Column(db.String(200), nullable=False, unique=True)
+    filename = db.Column(db.String(200), nullable=True, unique=True)
     title = db.Column(db.String(100), nullable=False)
+    progress = db.Column(db.Integer, default=0)    # 0-100 أو -1 للخطأ
+    total_size = db.Column(db.Integer, default=0) # لتخزين حجم الملف بالبايت
 
 # إنشاء الجداول عند بدء التشغيل
 with app.app_context():
@@ -34,76 +38,134 @@ with app.app_context():
 
 def get_video_list():
     """يحضر قائمة كل الفيديوهات من قاعدة البيانات"""
-    return Video.query.all()
+    # ترتيب الفيديوهات حسب الـ ID لعرض الأحدث في الأسفل
+    return Video.query.order_by(Video.id.desc()).all()
 
-def download_file_from_url(url, folder):
-    """يحمل الملف من رابط مباشر ويحفظه"""
-    try:
-        # إرسال طلب للحصول على محتوى الرابط
-        response = requests.get(url, stream=True, timeout=30)
-        response.raise_for_status() # التأكد من نجاح الطلب
+def download_file_from_url(url, folder, video_id):
+    """يحمل الملف من رابط مباشر ويحفظه مع تحديث التقدم في قاعدة البيانات"""
+    # الحصول على سياق التطبيق لتمكين التعديل على قاعدة البيانات من Thread منفصل
+    with app.app_context():
+        video = Video.query.get(video_id)
+        if not video: return
 
-        # استخراج اسم الملف من الرابط أو إنشاء اسم افتراضي
-        filename = secure_filename(url.split('/')[-1])
-        if not filename or '.' not in filename:
-            filename = f"video_{Video.query.count() + 1}.mp4"
+        try:
+            # زيادة الوقت المسموح للتحميل
+            response = requests.get(url, stream=True, timeout=300) 
+            response.raise_for_status()
+            
+            # الحصول على الحجم الكلي للملف
+            total_size = int(response.headers.get('content-length', 0))
 
-        # تحديد المسار الكامل للحفظ
-        file_path = os.path.join(folder, filename)
+            filename = secure_filename(url.split('/')[-1])
+            if not filename or '.' not in filename:
+                # إذا لم يكن هناك امتداد واضح، نفترض mp4 ونستخدم الـ ID كاسم
+                filename = f"video_{video_id}.mp4"
 
-        # الحفظ بشكل مجزأ لتوفير الذاكرة
-        with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        return filename
-    except requests.exceptions.RequestException as e:
-        print(f"Error downloading video: {e}")
-        return None
+            file_path = os.path.join(folder, filename)
+
+            downloaded_size = 0
+            
+            # حفظ اسم الملف وحجمه الكلي في قاعدة البيانات
+            video.filename = filename
+            video.total_size = total_size
+            db.session.commit()
+
+            # الحفظ بشكل مجزأ وتحديث شريط التقدم
+            with open(file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    # التأكد من عدم وجود خطأ خارجي
+                    if video.progress == -1: break 
+                    
+                    f.write(chunk)
+                    downloaded_size += len(chunk)
+                    
+                    # حساب نسبة التقدم وتحديثها
+                    progress = int((downloaded_size / total_size) * 100) if total_size else 0
+                    if progress > video.progress:
+                        video.progress = progress
+                        db.session.commit()
+            
+            # للتأكد من أن التقدم وصل لـ 100% في النهاية
+            if video.progress != -1:
+                video.progress = 100
+                db.session.commit()
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error downloading video ID {video_id}: {e}")
+            # تعيين التقدم إلى -1 للدلالة على وجود خطأ
+            video.progress = -1
+            # إزالة اسم الملف حتى لا يتم محاولة تشغيله
+            video.filename = None 
+            db.session.commit()
+        except Exception as e:
+            print(f"An unexpected error occurred for video ID {video_id}: {e}")
+            video.progress = -1
+            video.filename = None 
+            db.session.commit()
+
 
 # --- الـ Routes (المسارات) ---
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    """الصفحة الرئيسية: لعرض قائمة الفيديوهات وتحميل فيديو جديد"""
+    """الصفحة الرئيسية: لعرض قائمة الفيديوهات وبدء التحميل"""
     if request.method == 'POST':
         video_url = request.form.get('video_url')
-        video_title = request.form.get('video_title', 'Video Title')
+        video_title = request.form.get('video_title', 'فيديو جديد')
 
         if video_url:
-            filename = download_file_from_url(video_url, app.config['UPLOAD_FOLDER'])
-            if filename:
-                # حفظ معلومات الفيديو في قاعدة البيانات
-                new_video = Video(filename=filename, title=video_title)
-                db.session.add(new_video)
-                db.session.commit()
-                return redirect(url_for('index', success=True))
-            else:
-                return render_template('index.html', videos=get_video_list(), error="فشل التحميل. تأكد من صحة الرابط أو حاول لاحقًا.", page_title="مشغل الفيديو")
+            # 1. إنشاء إدخال مؤقت في قاعدة البيانات (حالة 'قيد التحميل')
+            new_video = Video(title=video_title, progress=0, filename=None, total_size=0)
+            db.session.add(new_video)
+            db.session.commit()
+            
+            # 2. تشغيل عملية التحميل في خلفية منفصلة باستخدام Threading
+            # ملاحظة: هذا الحل جيد للمشاريع الصغيرة، لكن في الإنتاج، استخدم Celery.
+            threading.Thread(target=download_file_from_url, args=(video_url, app.config['UPLOAD_FOLDER'], new_video.id)).start()
+
+            return redirect(url_for('index', started_download=new_video.id))
 
     videos = get_video_list()
     return render_template('index.html', videos=videos, page_title="مشغل الفيديو")
 
+@app.route('/status/<int:video_id>')
+def download_status(video_id):
+    """مسار AJAX لإرجاع حالة التقدم الحالية"""
+    video = Video.query.get(video_id)
+    if video:
+        # إرجاع نسبة التقدم واسم الملف النهائي إذا اكتمل
+        return jsonify({
+            'progress': video.progress,
+            'title': video.title,
+            'file_ready': video.progress == 100,
+            'error': video.progress == -1
+        })
+    return jsonify({'error': True, 'message': 'Video not found'}), 404
+
 
 @app.route('/stream/<int:video_id>')
 def stream(video_id):
-    """مسار لتشغيل الفيديو في المتصفح"""
+    """مسار لتشغيل الفيديو في المتصفح (مع Range Headers لـ Streaming سريع)"""
     video = Video.query.get_or_404(video_id)
+    
+    # يجب أن يكون التحميل قد اكتمل لكي يكون هناك اسم ملف
+    if not video.filename or video.progress != 100:
+        return "Video not ready for streaming.", 404
+        
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], video.filename)
     
     if not os.path.exists(file_path):
-        # حذف الإدخال من DB إذا كان الملف غير موجود (قد يحدث على Heroku)
+        # حذف الإدخال من DB إذا كان الملف غير موجود
         db.session.delete(video)
         db.session.commit()
         return "Video file not found. It might have been deleted from the server.", 404
 
-    # --- تنفيذ HTTP Range Streaming لتحسين الأداء ---
+    # تنفيذ HTTP Range Streaming
     range_header = request.headers.get('Range', None)
     if not range_header:
-        # إذا لم يكن هناك Range Header، إرسال الملف بالكامل (عادة للمشغلين القدامى)
+        # إذا لم يكن هناك Range Header، إرسال الملف بالكامل (للمشغلين القدامى)
         return send_from_directory(app.config['UPLOAD_FOLDER'], video.filename, mimetype=mimetypes.guess_type(video.filename)[0])
 
-    # منطق معالجة Range Headers (للتشغيل السريع والبحث داخل الفيديو)
     size = os.path.getsize(file_path)
     byte1, byte2 = 0, size - 1
 
@@ -138,6 +200,9 @@ def stream(video_id):
 def play(video_id):
     """صفحة المشغل لعرض الفيديو"""
     video = Video.query.get_or_404(video_id)
+    if video.progress != 100:
+         return redirect(url_for('index', error="الفيديو غير جاهز للتشغيل بعد!"))
+         
     return render_template('player.html', video=video, page_title=video.title)
 
 
@@ -149,7 +214,7 @@ def delete_video(video_id):
 
     try:
         # 1. حذف الملف من التخزين
-        if os.path.exists(file_path):
+        if video.filename and os.path.exists(file_path):
             os.remove(file_path)
         
         # 2. حذف الإدخال من قاعدة البيانات
@@ -164,4 +229,3 @@ def delete_video(video_id):
 
 if __name__ == '__main__':
     app.run(debug=True)
-
