@@ -2,136 +2,126 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title }}</title>
     <style>
-        body { font-family: Tahoma, sans-serif; background-color: #f4f4f9; color: #333; margin: 20px; }
-        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        /* ... (بقية أنماط CSS الأساسية) ... */
-        .progress-container {
-            width: 100%;
-            background-color: #ddd;
-            border-radius: 5px;
-            margin-top: 5px;
-            height: 25px;
-            overflow: hidden;
-            position: relative;
-        }
-        .progress-bar {
-            height: 100%;
-            background-color: #007bff;
-            text-align: center;
-            line-height: 25px;
-            color: white;
-            transition: width 0.3s ease;
-            position: relative;
-        }
-        .progress-text {
-            position: absolute;
-            width: 100%;
-            left: 0;
-            font-weight: bold;
-            color: #333; 
-            text-shadow: 0 0 2px white;
-        }
+        body { font-family: Tahoma, sans-serif; background-color: #f4f4f4; color: #333; margin: 20px; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1, h2 { text-align: center; color: #007bff; }
+        form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 30px; border-bottom: 1px solid #ddd; padding-bottom: 20px; }
+        input[type="text"], input[type="submit"] { padding: 10px; border-radius: 4px; border: 1px solid #ccc; font-size: 16px; }
+        input[type="submit"] { background-color: #28a745; color: white; cursor: pointer; border: none; transition: background-color 0.3s; }
+        input[type="submit"]:hover { background-color: #218838; }
+        ul { list-style: none; padding: 0; }
+        li { background: #e9ecef; margin-bottom: 10px; padding: 15px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .progress-bar { height: 20px; background-color: #ddd; border-radius: 4px; width: 150px; text-align: right; overflow: hidden; }
+        .progress-bar-inner { height: 100%; background-color: #007bff; text-align: center; color: white; line-height: 20px; transition: width 0.5s; }
+        .actions a, .actions button { padding: 5px 10px; border-radius: 4px; text-decoration: none; color: white; margin-right: 5px; border: none; cursor: pointer; }
+        .actions .play { background-color: #007bff; }
+        .actions .delete { background-color: #dc3545; }
+        .error { color: #dc3545; font-weight: bold; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>تحميل وعرض الفيديوهات</h1>
-        
+        <h1>تطبيق تحميل وبث الفيديو (Flask)</h1>
+
         <h2>تحميل فيديو جديد</h2>
-        <form method="POST" action="{{ url_for('index') }}">
-            <label for="video_title">عنوان الفيديو:</label>
-            <input type="text" id="video_title" name="video_title" required placeholder="مثال: فيلم أكشن جديد">
-            
-            <label for="video_url">رابط التحميل المباشر (Direct URL):</label>
-            <input type="text" id="video_url" name="video_url" required placeholder="ألصق رابط الفيديو هنا">
-            
-            <input type="submit" value="تحميل وعرض">
-            <div style="clear: both;"></div>
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+
+        <form method="POST">
+            <input type="text" name="video_url" placeholder="الرابط المباشر للفيديو (مثل: https://example.com/video.mp4)" required>
+            <input type="text" name="video_title" placeholder="عنوان الفيديو (اختياري)">
+            <input type="submit" value="بدء التحميل">
         </form>
 
-        <hr>
-
-        <h2>قائمة الفيديوهات المحملة ({{ videos | length }})</h2>
-        <ul class="video-list">
+        <h2>قائمة الفيديوهات</h2>
+        <ul id="video-list">
             {% for video in videos %}
-                <li class="video-item" id="video-item-{{ video.id }}" 
-                    {% if video.progress < 100 and video.progress >= 0 %}
-                        data-progress-id="{{ video.id }}"
-                    {% endif %}
-                    {% if video.progress == -1 %}
-                        class="video-item error-state"
-                    {% endif %}
-                >
-                    {% if video.progress == 100 %}
-                        <a href="{{ url_for('play', video_id=video.id) }}" class="video-link">{{ loop.index }}. {{ video.title }}</a>
-                        <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display: inline;">
-                            <button type="submit" class="delete-btn" onclick="return confirm('هل أنت متأكد من حذف هذا الفيديو؟')">حذف</button>
-                        </form>
-                    {% elif video.progress == -1 %}
-                        <span style="color: #721c24; font-weight: bold; flex-grow: 1;">{{ loop.index }}. {{ video.title }} (⚠️ فشل التحميل!)</span>
-                        <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display: inline;">
-                            <button type="submit" class="delete-btn">حذف الإدخال</button>
-                        </form>
-                    {% else %}
-                        <div style="flex-grow: 1;">
-                            <span class="video-link" style="color: #333;">{{ loop.index }}. {{ video.title }} (جاري التحميل: {{ (video.total_size/1024/1024)|round(2) }} ميغابايت)</span>
-                            <div class="progress-container">
-                                <div class="progress-bar" id="progress-bar-{{ video.id }}" style="width: {{ video.progress }}%;">
-                                    <span class="progress-text" id="progress-text-{{ video.id }}">{{ video.progress }}%</span>
+                <li id="video-item-{{ video.id }}">
+                    <span>{{ video.title }} (ID: {{ video.id }})</span>
+                    <div class="status-area">
+                        {% if video.progress == 100 %}
+                            <span style="color: green;">✓ جاهز للتشغيل</span>
+                        {% elif video.progress == -1 %}
+                            <span class="error">❌ خطأ في التحميل!</span>
+                            <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display:inline;">
+                                <button type="submit" class="delete" onclick="return confirm('هل أنت متأكد من الحذف؟')">حذف السجل</button>
+                            </form>
+                        {% else %}
+                            <div class="progress-bar" id="progress-bar-{{ video.id }}">
+                                <div class="progress-bar-inner" style="width: {{ video.progress }}%;" data-progress="{{ video.progress }}">
+                                    {{ video.progress }}%
                                 </div>
                             </div>
-                        </div>
-                    {% endif %}
+                        {% endif %}
+                    </div>
+                    <div class="actions">
+                        {% if video.progress == 100 %}
+                            <a href="{{ url_for('play', video_id=video.id) }}" class="play">تشغيل</a>
+                            <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display:inline;">
+                                <button type="submit" class="delete" onclick="return confirm('هل أنت متأكد من حذف الملف والفيديو؟')">حذف</button>
+                            </form>
+                        {% endif %}
+                    </div>
                 </li>
             {% endfor %}
         </ul>
     </div>
 
-<script>
-    function checkProgress() {
-        const items = document.querySelectorAll('[data-progress-id]');
-
-        items.forEach(item => {
-            const videoId = item.getAttribute('data-progress-id');
-            if (!videoId) return;
-
-            fetch(`/status/${videoId}`)
+    <script>
+        // وظيفة لتحديث حالة فيديو واحد
+        function updateStatus(videoId) {
+            fetch('/status/' + videoId)
                 .then(response => response.json())
                 .then(data => {
-                    const progressBar = document.getElementById(`progress-bar-${videoId}`);
-                    const progressText = document.getElementById(`progress-text-${videoId}`);
+                    const progressBar = document.getElementById('progress-bar-' + videoId);
+                    const listItem = document.getElementById('video-item-' + videoId);
 
-                    if (data.error) {
-                        alert(`حدث خطأ أثناء تحميل الفيديو "${data.title}". سيتم تحديث القائمة.`);
-                        location.reload(); 
-                        return;
-                    }
+                    if (!listItem || data.error) return; // تم حذف العنصر أو حدث خطأ
 
                     const progress = data.progress;
-                    if (progressBar && progressText) {
-                        progressBar.style.width = `${progress}%`;
-                        progressText.textContent = `${progress}%`;
-                    }
+                    const statusArea = listItem.querySelector('.status-area');
+                    const actionsArea = listItem.querySelector('.actions');
                     
-                    if (data.file_ready) {
-                        alert(`اكتمل تحميل الفيديو "${data.title}" بنجاح!`);
+                    if (progress >= 0 && progress < 100) {
+                        // تحديث شريط التقدم إذا كان التحميل مستمراً
+                        const innerBar = progressBar.querySelector('.progress-bar-inner');
+                        innerBar.style.width = progress + '%';
+                        innerBar.textContent = progress + '%';
+                        setTimeout(() => updateStatus(videoId), 2000); // استمر في التحديث
+                    } else if (progress === 100 && !data.file_ready) {
+                         // حالة: اكتمل التحميل في DB لكن لم يتم تحديث الواجهة بعد
                         location.reload(); 
+                    } else if (progress === -1) {
+                        // حالة: خطأ في التحميل
+                        listItem.querySelector('.status-area').innerHTML = '<span class="error">❌ خطأ في التحميل!</span>' +
+                            '<form method="POST" action="/delete/' + videoId + '" style="display:inline;">' +
+                            '<button type="submit" class="delete" onclick="return confirm(\'هل أنت متأكد من الحذف؟\')">حذف السجل</button>' +
+                            '</form>';
+                        listItem.querySelector('.actions').innerHTML = ''; // إزالة أزرار التشغيل
+                    } else if (progress === 100 && data.file_ready) {
+                        // حالة: اكتمل التحميل (تحديث الواجهة للتشغيل)
+                        statusArea.innerHTML = '<span style="color: green;">✓ جاهز للتشغيل</span>';
+                        actionsArea.innerHTML = '<a href="/play/' + videoId + '" class="play">تشغيل</a>' +
+                            '<form method="POST" action="/delete/' + videoId + '" style="display:inline;">' +
+                            '<button type="submit" class="delete" onclick="return confirm(\'هل أنت متأكد من حذف الملف والفيديو؟\')">حذف</button>' +
+                            '</form>';
                     }
                 })
-                .catch(error => {
-                    console.error('Error fetching progress:', error);
-                });
-        });
-    }
+                .catch(error => console.error('Error fetching status for ID ' + videoId, error));
+        }
 
-    // **الإصلاح:** ابدأ التحقق من شريط التقدم فورًا عند تحميل الصفحة
-    if (document.querySelector('[data-progress-id]')) {
-        checkProgress(); // الفحص الفوري
-        setInterval(checkProgress, 1500); // الفحص الدوري كل 1.5 ثانية
-    }
-</script>
+        // بدء تحديث الحالات عند تحميل الصفحة
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.progress-bar').forEach(bar => {
+                const videoId = parseInt(bar.id.replace('progress-bar-', ''));
+                if (videoId) {
+                    updateStatus(videoId);
+                }
+            });
+        });
+    </script>
 </body>
 </html>
