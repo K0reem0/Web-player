@@ -13,13 +13,49 @@
         input[type="submit"] { background-color: #28a745; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; float: left; }
         input[type="submit"]:hover { background-color: #218838; }
         .video-list { list-style: none; padding: 0; }
-        .video-item { background: #e9ecef; margin-bottom: 10px; padding: 10px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .video-item { background: #e9ecef; margin-bottom: 10px; padding: 10px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
         .video-link { color: #007bff; text-decoration: none; font-weight: bold; }
         .delete-btn { background-color: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
         .delete-btn:hover { background-color: #c82333; }
         .message { padding: 10px; border-radius: 4px; margin-bottom: 15px; }
         .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
         .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        /* أنماط شريط التقدم */
+        .progress-container {
+            width: 100%;
+            background-color: #ddd;
+            border-radius: 5px;
+            margin-top: 5px;
+            height: 25px;
+            overflow: hidden;
+            position: relative;
+        }
+        .progress-bar {
+            height: 100%;
+            background-color: #007bff;
+            text-align: center;
+            line-height: 25px;
+            color: white;
+            transition: width 0.3s ease; /* لإظهار حركة شريط التقدم بشكل سلس */
+            position: relative;
+        }
+        .progress-text {
+            position: absolute;
+            width: 100%;
+            left: 0;
+            font-weight: bold;
+            color: #333; 
+            text-shadow: 0 0 2px white;
+        }
+        /* تعديل لعرض العناصر بشكل صحيح داخل عنصر القائمة */
+        .video-item > div {
+            flex-grow: 1;
+            padding-left: 10px;
+        }
+        .video-item.error-state {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+        }
     </style>
 </head>
 <body>
@@ -52,11 +88,35 @@
         {% if videos %}
             <ul class="video-list">
                 {% for video in videos %}
-                    <li class="video-item">
-                        <a href="{{ url_for('play', video_id=video.id) }}" class="video-link">{{ loop.index }}. {{ video.title }} ({{ video.filename }})</a>
-                        <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display: inline;">
-                            <button type="submit" class="delete-btn" onclick="return confirm('هل أنت متأكد من حذف هذا الفيديو؟')">حذف</button>
-                        </form>
+                    <li class="video-item" id="video-item-{{ video.id }}" 
+                        {% if video.progress < 100 and video.progress >= 0 %}
+                            data-progress-id="{{ video.id }}"
+                        {% endif %}
+                        {% if video.progress == -1 %}
+                            class="video-item error-state"
+                        {% endif %}
+                    >
+                        {% if video.progress == 100 %}
+                            <a href="{{ url_for('play', video_id=video.id) }}" class="video-link">{{ loop.index }}. {{ video.title }}</a>
+                            <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display: inline;">
+                                <button type="submit" class="delete-btn" onclick="return confirm('هل أنت متأكد من حذف هذا الفيديو؟')">حذف</button>
+                            </form>
+                        {% elif video.progress == -1 %}
+                            <span style="color: #721c24; font-weight: bold; flex-grow: 1;">{{ loop.index }}. {{ video.title }} (⚠️ فشل التحميل!)</span>
+                            <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display: inline;">
+                                <button type="submit" class="delete-btn">حذف الإدخال</button>
+                            </form>
+                        {% else %}
+                            <div style="flex-grow: 1;">
+                                <span class="video-link" style="color: #333;">{{ loop.index }}. {{ video.title }} (جاري التحميل...)</span>
+                                <div class="progress-container">
+                                    <div class="progress-bar" id="progress-bar-{{ video.id }}" style="width: {{ video.progress }}%;">
+                                        <span class="progress-text" id="progress-text-{{ video.id }}">{{ video.progress }}%</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <span style="color: #6c757d; margin-right: 15px;">...</span>
+                        {% endif %}
                     </li>
                 {% endfor %}
             </ul>
@@ -64,5 +124,53 @@
             <p>لا توجد فيديوهات محملة حاليًا.</p>
         {% endif %}
     </div>
+
+<script>
+    function checkProgress() {
+        // ابحث عن جميع العناصر التي تحتاج لتحديث التقدم
+        const items = document.querySelectorAll('[data-progress-id]');
+
+        items.forEach(item => {
+            const videoId = item.getAttribute('data-progress-id');
+            if (!videoId) return;
+
+            // إرسال طلب AJAX للحصول على حالة التحميل
+            fetch(`/status/${videoId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const progressBar = document.getElementById(`progress-bar-${videoId}`);
+                    const progressText = document.getElementById(`progress-text-${videoId}`);
+
+                    if (data.error) {
+                        // حالة الخطأ
+                        alert(`حدث خطأ أثناء تحميل الفيديو "${data.title}". سيتم تحديث القائمة.`);
+                        location.reload(); 
+                        return;
+                    }
+
+                    const progress = data.progress;
+                    if (progressBar && progressText) {
+                        progressBar.style.width = `${progress}%`;
+                        progressText.textContent = `${progress}%`;
+                    }
+                    
+                    if (data.file_ready) {
+                        // التحميل اكتمل
+                        alert(`اكتمل تحميل الفيديو "${data.title}" بنجاح!`);
+                        location.reload(); 
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching progress:', error);
+                });
+        });
+    }
+
+    // ابدأ تحديث شريط التقدم كل ثانية إذا كان هناك فيديو قيد التحميل
+    if (document.querySelector('[data-progress-id]')) {
+        // نستخدم 1500 مللي ثانية (1.5 ثانية) لتقليل عدد طلبات الخادم
+        setInterval(checkProgress, 1500); 
+    }
+</script>
 </body>
 </html>
