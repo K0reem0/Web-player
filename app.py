@@ -9,6 +9,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 import mimetypes
 from urllib.parse import urlparse
+from sqlalchemy.exc import OperationalError
 
 # مكتبات التخطي
 from curl_cffi import requests as cc_requests
@@ -42,8 +43,17 @@ class Video(db.Model):
     start_time = db.Column(db.Float, nullable=True) 
 
 # إنشاء الجداول عند بدء التشغيل
+
+# إنشاء الجداول عند بدء التشغيل مع تفادي تصادم الـ Workers
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+    except OperationalError:
+        # إذا قام Worker آخر بإنشاء الجدول في نفس اللحظة، تجاهل الخطأ
+        pass
+    except Exception as e:
+        print(f"Error creating database: {e}")
+
 
 
 # --- وظائف المساعدة ---
