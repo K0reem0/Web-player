@@ -2,3 +2,7 @@ Flask
 Flask-SQLAlchemy
 requests
 gunicorn
+beautifulsoup4
+pillow
+selenium
+webdriver-manager
