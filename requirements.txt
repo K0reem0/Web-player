@@ -6,3 +6,5 @@ beautifulsoup4
 pillow
 selenium
 webdriver-manager
+lxml
+curl_cffi
