@@ -10,7 +10,7 @@ from werkzeug.utils import secure_filename
 import mimetypes
 from urllib.parse import urlparse
 
-# مكتبات التخطي الجديدة
+# مكتبات التخطي
 from curl_cffi import requests as cc_requests
 from bs4 import BeautifulSoup
 
@@ -91,7 +91,7 @@ def parse_cookies(cookie_string):
     return cookies
 
 
-# --- دوال تخطي OUO (تم تعديلها لتكون آمنة مع الخوادم Thread-Safe) ---
+# --- دوال تخطي OUO ---
 
 def RecaptchaV3():
     ANCHOR_URL = 'https://www.google.com/recaptcha/api2/anchor?ar=1&k=6Lcr1ncUAAAAAH3cghg6cOTPGARa8adOf-y9zv2x&co=aHR0cHM6Ly9vdW8ucHJlc3M6NDQz&hl=en&v=pCoGBhjs9s8EhFOHJFe8cqis&size=invisible&cb=ahgyd1gkfkhe'
@@ -116,6 +116,7 @@ def RecaptchaV3():
     answer = re.findall(r'"rresp","(.*?)"', res.text)[0]
     return answer
 
+
 def ouo_bypass(url):
     print(f"🚀 بدء عملية فك الرابط المختصر باستخدام curl_cffi: {url}")
     url = url.strip()
@@ -123,7 +124,7 @@ def ouo_bypass(url):
     p = urlparse(tempurl)
     id = tempurl.split('/')[-1]
 
-    # إنشاء جلسة جديدة لكل طلب لتجنب تداخل الـ Threads
+    # إنشاء جلسة جديدة لكل طلب
     client = cc_requests.Session()
     client.headers.update({
         'authority': 'ouo.io',
@@ -143,6 +144,13 @@ def ouo_bypass(url):
                 break
 
             bs4 = BeautifulSoup(res.content, 'lxml')
+            
+            # --- التأكد من وجود النموذج قبل استخراج البيانات (تفادي خطأ NoneType) ---
+            if bs4.form is None:
+                print("⚠️ فشل التخطي: لم يتم العثور على نموذج (Form) في الصفحة المحملة. (قد يكون الموقع يطلب كابتشا معقدة أو حماية).")
+                return None
+            # -------------------------------------------------------------
+
             inputs = bs4.form.findAll("input", {"name": re.compile(r"token$")})
             data = {input.get('name'): input.get('value') for input in inputs}
             data['x-token'] = RecaptchaV3()
@@ -160,7 +168,7 @@ def ouo_bypass(url):
         print(f"❌ خطأ أثناء فك الرابط: {e}")
         return None
 
-# --- تعديل دالة التحميل ---
+# --- دالة التحميل ---
 
 def download_file_from_url(url, folder, video_id, cookies_dict=None):
     global DOWNLOAD_STATE
