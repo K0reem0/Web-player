@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import json
 import threading
@@ -7,12 +8,11 @@ from flask import Flask, request, redirect, url_for, render_template, send_from_
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 import mimetypes
+from urllib.parse import urlparse
 
-# --- مكتبات جديدة لعمل Bypass ---
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
+# مكتبات التخطي الجديدة
+from curl_cffi import requests as cc_requests
+from bs4 import BeautifulSoup
 
 # تهيئة Flask والتكوين
 app = Flask(__name__)
@@ -45,13 +45,13 @@ class Video(db.Model):
 with app.app_context():
     db.create_all()
 
+
 # --- وظائف المساعدة ---
 
 def get_video_list():
     return Video.query.order_by(Video.id.desc()).all()
 
 def parse_cookies(cookie_string):
-    """تحويل سلسلة الكوكيز إلى قاموس Python."""
     cookies = {}
     if not cookie_string:
         return cookies
@@ -90,71 +90,78 @@ def parse_cookies(cookie_string):
 
     return cookies
 
-# --- الدالة الجديدة الخاصة بتخطي الروابط ---
-def bypass_ouo_link(url):
-    """
-    تفتح متصفح مخفي، تقوم بتخطي ouo.io بناءً على منطق السكربت، وترجع الرابط النهائي.
-    """
-    print(f"🚀 بدء عملية فك الرابط المختصر: {url}")
-    
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless') # العمل في الخلفية بدون واجهة رسومية
-    options.add_argument('--disable-gpu')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    # إخفاء حقيقة أنه متصفح آلي
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+# --- دوال تخطي OUO (تم تعديلها لتكون آمنة مع الخوادم Thread-Safe) ---
+
+def RecaptchaV3():
+    ANCHOR_URL = 'https://www.google.com/recaptcha/api2/anchor?ar=1&k=6Lcr1ncUAAAAAH3cghg6cOTPGARa8adOf-y9zv2x&co=aHR0cHM6Ly9vdW8ucHJlc3M6NDQz&hl=en&v=pCoGBhjs9s8EhFOHJFe8cqis&size=invisible&cb=ahgyd1gkfkhe'
+    url_base = 'https://www.google.com/recaptcha/'
+    post_data = "v={}&reason=q&c={}&k={}&co={}"
     
+    lclient = requests.Session()
+    lclient.headers.update({
+        'content-type': 'application/x-www-form-urlencoded'
+    })
+    
+    matches = re.findall(r'([api2|enterprise]+)/anchor\?(.*)', ANCHOR_URL)[0]
+    url_base += matches[0] + '/'
+    params = matches[1]
+    
+    res = lclient.get(url_base + 'anchor', params=params)
+    token = re.findall(r'"recaptcha-token" value="(.*?)"', res.text)[0]
+    params = dict(pair.split('=') for pair in params.split('&'))
+    post_data = post_data.format(params["v"], token, params["k"], params["co"])
+    
+    res = lclient.post(url_base + 'reload', params=f'k={params["k"]}', data=post_data)
+    answer = re.findall(r'"rresp","(.*?)"', res.text)[0]
+    return answer
+
+def ouo_bypass(url):
+    print(f"🚀 بدء عملية فك الرابط المختصر باستخدام curl_cffi: {url}")
+    url = url.strip()
+    tempurl = url.replace("ouo.press", "ouo.io")
+    p = urlparse(tempurl)
+    id = tempurl.split('/')[-1]
+
+    # إنشاء جلسة جديدة لكل طلب لتجنب تداخل الـ Threads
+    client = cc_requests.Session()
+    client.headers.update({
+        'authority': 'ouo.io',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
+        'cache-control': 'max-age=0',
+        'referer': 'http://www.google.com/ig/adde?moduleurl=',
+        'upgrade-insecure-requests': '1',
+    })
+
     try:
-        driver.get(url)
-        
-        # إعطاء المتصفح وقتاً لتحميل الصفحة
-        time.sleep(3)
-        
-        # 1. البحث عن زر "I'm a human" أو ما شابه والضغط عليه
-        try:
-            buttons = driver.find_elements(By.TAG_NAME, "button")
-            for btn in buttons:
-                text = btn.text.lower().strip()
-                if "human" in text or "verify" in text or "not a robot" in text:
-                    print("👤 تم العثور على زر التحقق البشري، جاري الضغط...")
-                    driver.execute_script("arguments[0].click();", btn)
-                    time.sleep(2)
-                    break
-        except Exception as e:
-            pass # قد لا يكون الزر موجوداً أصلاً
+        res = client.get(tempurl, impersonate="chrome110")
+        next_url = f"{p.scheme}://{p.hostname}/go/{id}"
 
-        # 2. حلقة (Loop) للبحث عن form-go وتقديمه
-        for attempt in range(15): # المحاولة لمدة 30 ثانية (15 محاولة * ثانيتين)
-            current_url = driver.current_url
-            
-            # إذا تغير الرابط ولم يعد يحتوي على ouo، فهذا يعني أن التخطي نجح!
-            if "ouo.io" not in current_url and "ouo.press" not in current_url:
-                print(f"✅ تم فك الرابط بنجاح! الرابط النهائي: {current_url}")
-                return current_url
-                
-            try:
-                # البحث عن النموذج form-go وإرساله
-                form_go = driver.find_element(By.ID, "form-go")
-                driver.execute_script("arguments[0].submit();", form_go)
-                print(f"📤 تم إرسال النموذج form-go (محاولة {attempt+1})")
-            except:
-                pass
-                
-            time.sleep(2)
-            
-        print("⚠️ انتهت محاولات فك الرابط دون تغيير في عنوان URL.")
-        return driver.current_url 
-        
+        for _ in range(2):
+            if res.headers.get('Location'):
+                break
+
+            bs4 = BeautifulSoup(res.content, 'lxml')
+            inputs = bs4.form.findAll("input", {"name": re.compile(r"token$")})
+            data = {input.get('name'): input.get('value') for input in inputs}
+            data['x-token'] = RecaptchaV3()
+
+            h = {
+                'content-type': 'application/x-www-form-urlencoded'
+            }
+
+            res = client.post(next_url, data=data, headers=h, allow_redirects=False, impersonate="chrome110")
+            next_url = f"{p.scheme}://{p.hostname}/xreallcygo/{id}"
+
+        bypassed_link = res.headers.get('Location')
+        return bypassed_link
     except Exception as e:
-        print(f"❌ حدث خطأ أثناء فك الرابط: {e}")
-        return url # في حال الفشل، نرجع الرابط الأصلي
-    finally:
-        driver.quit() # التأكد من إغلاق المتصفح الوهمي لتنظيف الذاكرة
+        print(f"❌ خطأ أثناء فك الرابط: {e}")
+        return None
 
 # --- تعديل دالة التحميل ---
+
 def download_file_from_url(url, folder, video_id, cookies_dict=None):
     global DOWNLOAD_STATE
     
@@ -165,17 +172,27 @@ def download_file_from_url(url, folder, video_id, cookies_dict=None):
             return
 
         # ----------------------------------------------------
-        # التحقق مما إذا كان الرابط هو رابط ouo.io مختصر
+        # التحقق مما إذا كان الرابط هو رابط ouo مختصر
         if "ouo.io" in url or "ouo.press" in url:
             video.title = video.title + " (جاري فك الرابط...)"
             db.session.commit()
             
-            # استدعاء دالة التخطي للحصول على الرابط المباشر
-            url = bypass_ouo_link(url)
+            # استدعاء دالة التخطي الجديدة للحصول على الرابط المباشر
+            bypassed_url = ouo_bypass(url)
             
             # إزالة نص "جاري فك الرابط..." بعد الانتهاء
             video.title = video.title.replace(" (جاري فك الرابط...)", "")
             db.session.commit()
+
+            if bypassed_url:
+                url = bypassed_url
+                print(f"✅ تم فك الرابط بنجاح! الرابط النهائي: {url}")
+            else:
+                print("❌ فشل فك الرابط.")
+                video.progress = -1
+                db.session.commit()
+                if video_id in DOWNLOAD_STATE: del DOWNLOAD_STATE[video_id]
+                return
         # ----------------------------------------------------
 
         try:
@@ -230,7 +247,7 @@ def download_file_from_url(url, folder, video_id, cookies_dict=None):
             if video_id in DOWNLOAD_STATE: del DOWNLOAD_STATE[video_id]
 
 
-# --- باقي الـ Routes كما هي ---
+# --- الـ Routes ---
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -255,7 +272,6 @@ def index():
             db.session.commit()
             DOWNLOAD_STATE[new_video.id] = 0
             
-            # تشغيل التحميل (سيتكفل بفك الرابط أولاً إن كان مختصراً)
             threading.Thread(
                 target=download_file_from_url, 
                 args=(video_url, app.config['UPLOAD_FOLDER'], new_video.id, cookies_dict)
