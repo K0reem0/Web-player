@@ -2,167 +2,104 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>{{ page_title }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>أداة تخطي روابط OUO</title>
     <style>
-        body { font-family: Tahoma, sans-serif; background-color: #f4f4f4; color: #333; margin: 20px; }
-        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h1, h2 { text-align: center; color: #007bff; }
-        form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 30px; border-bottom: 1px solid #ddd; padding-bottom: 20px; }
-        input[type="text"], input[type="submit"], textarea { padding: 10px; border-radius: 4px; border: 1px solid #ccc; font-size: 16px; }
-        input[type="submit"] { background-color: #28a745; color: white; cursor: pointer; border: none; transition: background-color 0.3s; }
-        input[type="submit"]:hover { background-color: #218838; }
-        ul { list-style: none; padding: 0; }
-        li { background: #e9ecef; margin-bottom: 10px; padding: 15px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
-        .progress-bar { height: 25px; background-color: #ddd; border-radius: 4px; width: 350px; text-align: right; overflow: hidden; position: relative; }
-        .progress-bar-inner { 
-            height: 100%; 
-            background-color: #007bff; 
-            text-align: center; 
-            color: white; 
-            line-height: 25px; 
-            transition: width 0.5s; 
-            direction: ltr; /* للحفاظ على تنسيق الأرقام والـ KB/s */ 
-            white-space: nowrap;
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
         }
-        .actions a, .actions button { padding: 5px 10px; border-radius: 4px; text-decoration: none; color: white; margin-right: 5px; border: none; cursor: pointer; }
-        .actions .play { background-color: #007bff; }
-        .actions .delete { background-color: #dc3545; }
-        .error { color: #dc3545; font-weight: bold; }
-        /* لتوسيط النص داخل شريط التقدم */
-        .progress-bar-inner span { margin: 0 5px; } 
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+        h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        input[type="text"] {
+            width: 90%;
+            padding: 12px;
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 16px;
+            direction: ltr;
+        }
+        button {
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e2f0d9;
+            color: #2e7d32;
+            border-radius: 5px;
+            border: 1px solid #c8e6c9;
+            word-break: break-all;
+        }
+        .error {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #ffebee;
+            color: #c62828;
+            border-radius: 5px;
+            border: 1px solid #ffcdd2;
+        }
+        a.direct-link {
+            display: inline-block;
+            margin-top: 10px;
+            color: #007BFF;
+            text-decoration: none;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>تطبيق تحميل وبث الفيديو (Flask)</h1>
 
-        <h2>تحميل فيديو جديد</h2>
-        {% if error %}
-            <p class="error">{{ error }}</p>
-        {% endif %}
+<div class="container">
+    <h2>أداة تخطي روابط OUO</h2>
+    <form method="POST">
+        <input type="text" name="url" placeholder="أدخل رابط ouo.io أو ouo.press هنا..." required>
+        <br>
+        <button type="submit">تخطي الرابط</button>
+    </form>
 
-        <form method="POST">
-            <input type="text" name="video_url" placeholder="الرابط المباشر للفيديو (مثل: https://example.com/video.mp4)" required>
-            <input type="text" name="video_title" placeholder="عنوان الفيديو (اختياري)">
-            
-            <textarea name="cookies_data" rows="4" 
-                      placeholder="لصق بيانات الكوكيز هنا (اختياري): بتنسيق HTTP (key=value;...) أو Netscape"
-                      style="resize: vertical; font-family: monospace;"></textarea> 
-                      
-            <input type="submit" value="بدء التحميل">
-        </form>
+    {% if result %}
+        <div class="result">
+            <strong>تم التخطي بنجاح!</strong><br>
+            <a href="{{ result }}" class="direct-link" target="_blank">{{ result }}</a>
+        </div>
+    {% endif %}
 
-        <h2>قائمة الفيديوهات</h2>
-        <ul id="video-list">
-            {% for video in videos %}
-                <li id="video-item-{{ video.id }}">
-                    <span>{{ video.title }} (ID: {{ video.id }})</span>
-                    <div class="status-area">
-                        {% if video.progress == 100 %}
-                            <span style="color: green;">✓ جاهز للتشغيل</span>
-                        {% elif video.progress == -1 %}
-                            <span class="error">❌ خطأ في التحميل!</span>
-                            <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display:inline;">
-                                <button type="submit" class="delete" onclick="return confirm('هل أنت متأكد من الحذف؟')">حذف السجل</button>
-                            </form>
-                        {% else %}
-                            <div class="progress-bar" id="progress-bar-{{ video.id }}">
-                                <div class="progress-bar-inner" style="width: 0%;" data-progress="{{ video.progress }}">
-                                    <span>0% جاري...</span>
-                                </div>
-                            </div>
-                        {% endif %}
-                    </div>
-                    <div class="actions">
-                        {% if video.progress == 100 %}
-                            <a href="{{ url_for('play', video_id=video.id) }}" class="play">تشغيل</a>
-                            <form method="POST" action="{{ url_for('delete_video', video_id=video.id) }}" style="display:inline;">
-                                <button type="submit" class="delete" onclick="return confirm('هل أنت متأكد من حذف الملف والفيديو؟')">حذف</button>
-                            </form>
-                        {% endif %}
-                    </div>
-                </li>
-            {% endfor %}
-        </ul>
-    </div>
+    {% if error %}
+        <div class="error">
+            <strong>خطأ:</strong> {{ error }}
+        </div>
+    {% endif %}
+</div>
 
-    <script>
-        // وظيفة لتحويل الثواني إلى تنسيق HH:MM:SS
-        function formatETA(seconds) {
-            if (seconds === null || seconds === undefined) return 'يُحسب...';
-            if (seconds < 0) return '00:00';
-            
-            const h = Math.floor(seconds / 3600);
-            const m = Math.floor((seconds % 3600) / 60);
-            const s = Math.floor(seconds % 60);
-            
-            const parts = [h, m, s].map(v => v.toString().padStart(2, '0'));
-            
-            return (h > 0 ? parts[0] + ':' : '') + parts[1] + ':' + parts[2];
-        }
-
-        // وظيفة لتحديث حالة فيديو واحد
-        function updateStatus(videoId) {
-            fetch('/status/' + videoId)
-                .then(response => response.json())
-                .then(data => {
-                    const progressBar = document.getElementById('progress-bar-' + videoId);
-                    const listItem = document.getElementById('video-item-' + videoId);
-
-                    if (!listItem || data.error) return; 
-
-                    const progress = data.progress;
-                    const statusArea = listItem.querySelector('.status-area');
-                    const actionsArea = listItem.querySelector('.actions');
-                    
-                    if (progress >= 0 && progress < 100) {
-                        // 1. تحديث شريط التقدم التقديري
-                        const innerBar = progressBar.querySelector('.progress-bar-inner');
-                        
-                        innerBar.style.width = progress + '%';
-                        
-                        // 2. عرض السرعة والوقت التقديري
-                        const speedText = data.speed_kbps > 0 ? `${data.speed_kbps.toFixed(2)} KB/s` : 'جاري البدء...';
-                        const etaText = data.eta_seconds !== null ? ` | متبقي: ${formatETA(data.eta_seconds)}` : '';
-                        
-                        innerBar.innerHTML = `<span>${progress}% (${speedText}${etaText})</span>`;
-
-                        // 3. استمرار التحديث كل ثانية
-                        setTimeout(() => updateStatus(videoId), 1000); 
-                    } else if (progress === 100 && data.file_ready) {
-                        // حالة: اكتمل التحميل 
-                        
-                        const innerBar = progressBar.querySelector('.progress-bar-inner');
-                        innerBar.style.width = '100%';
-                        innerBar.innerHTML = `<span>100% اكتمل</span>`;
-                        
-                        statusArea.innerHTML = '<span style="color: green;">✓ جاهز للتشغيل</span>';
-                        
-                        actionsArea.innerHTML = '<a href="/play/' + videoId + '" class="play">تشغيل</a>' +
-                            '<form method="POST" action="/delete/' + videoId + '" style="display:inline;">' +
-                            '<button type="submit" class="delete" onclick="return confirm(\'هل أنت متأكد من حذف الملف والفيديو؟\')">حذف</button>' +
-                            '</form>';
-                    } else if (progress === -1) {
-                        // حالة: خطأ في التحميل
-                        listItem.querySelector('.status-area').innerHTML = '<span class="error">❌ خطأ في التحميل!</span>' +
-                            '<form method="POST" action="/delete/' + videoId + '" style="display:inline;">' +
-                            '<button type="submit" class="delete" onclick="return confirm(\'هل أنت متأكد من الحذف؟\')">حذف السجل</button>' +
-                            '</form>';
-                        listItem.querySelector('.actions').innerHTML = ''; 
-                    }
-                })
-                .catch(error => console.error('Error fetching status for ID ' + videoId, error));
-        }
-
-        // بدء تحديث الحالات عند تحميل الصفحة
-        document.addEventListener('DOMContentLoaded', () => {
-            document.querySelectorAll('.progress-bar').forEach(bar => {
-                const videoId = parseInt(bar.id.replace('progress-bar-', ''));
-                if (videoId) {
-                    updateStatus(videoId);
-                }
-            });
-        });
-    </script>
 </body>
 </html>
+
