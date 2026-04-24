@@ -21,21 +21,38 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 def create_driver():
-    """إعداد متصفح Chrome للعمل بشكل مخفي على هيروكو"""
+    """إعداد متصفح Chrome للعمل بشكل مخفي وتجاوز اكتشاف الروبوتات"""
     chrome_options = Options()
-    chrome_options.add_argument("--headless")  # تشغيل بدون واجهة رسومية
+    
+    # إعدادات أساسية لهيروكو
+    chrome_options.add_argument("--headless=new")  # استخدام المحرك المخفي الجديد لكروم
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     
-    # تحديد مسار Chrome (هيروكو يضعه في هذا المسار عند استخدام الـ Buildpack)
+    # إعدادات مهمة جداً لإخفاء السيلينيوم عن Cloudflare
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+    
+    # إضافة User-Agent واقعي
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
     chrome_bin = os.environ.get("GOOGLE_CHROME_BIN")
     if chrome_bin:
         chrome_options.binary_location = chrome_bin
 
-    # إعداد الـ Driver
-    # ملاحظة: الـ Buildpack يقوم بضبط المسارات تلقائياً في الغالب
     driver = webdriver.Chrome(options=chrome_options)
+    
+    # تنفيذ سكربت إضافي لمسح أي أثر للسيلينيوم من المتصفح
+    driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+        'source': '''
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => undefined
+            })
+        '''
+    })
+    
     return driver
 
 def ouo_bypass(url):
