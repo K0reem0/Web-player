@@ -1,13 +1,16 @@
 from flask import Flask, request, render_template
-import re
-from curl_cffi import requests as cc_requests
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse
-import requests
 import logging
 import sys
+import os
+import time
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# إعداد نظام تسجيل الأخطاء (Logging) ليظهر في Heroku
+# إعداد الـ Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -17,136 +20,89 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-def RecaptchaV3():
-    logger.info("جاري محاولة حل Recaptcha V3...")
-    ANCHOR_URL = 'https://www.google.com/recaptcha/api2/anchor?ar=1&k=6Lcr1ncUAAAAAH3cghg6cOTPGARa8adOf-y9zv2x&co=aHR0cHM6Ly9vdW8ucHJlc3M6NDQz&hl=en&v=pCoGBhjs9s8EhFOHJFe8cqis&size=invisible'
-    url_base = 'https://www.google.com/recaptcha/'
-    post_data = "v={}&reason=q&c={}&k={}&co={}"
+def create_driver():
+    """إعداد متصفح Chrome للعمل بشكل مخفي على هيروكو"""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # تشغيل بدون واجهة رسومية
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    
+    # تحديد مسار Chrome (هيروكو يضعه في هذا المسار عند استخدام الـ Buildpack)
+    chrome_bin = os.environ.get("GOOGLE_CHROME_BIN")
+    if chrome_bin:
+        chrome_options.binary_location = chrome_bin
 
-    session = requests.Session()
-    session.headers.update({
-        'content-type': 'application/x-www-form-urlencoded'
-    })
-
-    matches = re.findall(r'(api2|enterprise)/anchor\?(.*)', ANCHOR_URL)
-    if not matches:
-        logger.error("فشل في تحليل رابط Recaptcha الأساسي.")
-        raise Exception("فشل في تحليل رابط Recaptcha")
-
-    matches = matches[0]
-    url_base += matches[0] + '/'
-    params = matches[1]
-
-    try:
-        res = session.get(url_base + 'anchor', params=params)
-        token_match = re.findall(r'"recaptcha-token" value="(.*?)"', res.text)
-        if not token_match:
-            logger.error("لم يتم العثور على recaptcha-token في الصفحة.")
-            raise Exception("فشل في الحصول على توكن Recaptcha")
-
-        token = token_match[0]
-        params = dict(pair.split('=') for pair in params.split('&'))
-
-        post_data = post_data.format(params["v"], token, params["k"], params["co"])
-        res = session.post(url_base + 'reload', params=f'k={params["k"]}', data=post_data)
-
-        answer_match = re.findall(r'"rresp","(.*?)"', res.text)
-        if not answer_match:
-            logger.error(f"فشل في حل Recaptcha، رد السيرفر: {res.text[:100]}")
-            raise Exception("فشل في حل Recaptcha")
-
-        logger.info("تم حل Recaptcha بنجاح.")
-        return answer_match[0]
-    except Exception as e:
-        logger.exception("حدث خطأ غير متوقع أثناء حل الكابتشا:")
-        raise e
+    # إعداد الـ Driver
+    # ملاحظة: الـ Buildpack يقوم بضبط المسارات تلقائياً في الغالب
+    driver = webdriver.Chrome(options=chrome_options)
+    return driver
 
 def ouo_bypass(url):
-    logger.info(f"بدء عملية التخطي للرابط: {url}")
-    url = url.strip()
-    tempurl = url.replace("ouo.press", "ouo.io")
-    parsed = urlparse(tempurl)
-    link_id = tempurl.split('/')[-1]
+    logger.info(f"بدء التخطي عبر المتصفح للرابط: {url}")
+    driver = create_driver()
+    try:
+        # تحويل الرابط إذا كان ouo.press
+        target_url = url.replace("ouo.press", "ouo.io")
+        driver.get(target_url)
+        
+        # الانتظار لتخطي حماية Cloudflare (الانتظار حتى يظهر زر "I'm a human")
+        logger.info("في انتظار تخطي Cloudflare وظهور زر التأكيد...")
+        wait = WebDriverWait(driver, 20)
+        
+        # محاولة الضغط على الزر الأول (I'm a human)
+        # ملاحظة: ouo يستخدم أحياناً زر داخل Form
+        try:
+            btn = wait.until(EC.element_to_be_clickable((By.ID, "btn-main")))
+            logger.info("تم العثور على الزر الأول، جاري الضغط...")
+            # أحياناً يحتاج الأمر لسكربت للضغط إذا كان هناك عنصر فوق الزر
+            driver.execute_script("arguments[0].click();", btn)
+        except Exception as e:
+            logger.warning("لم يتم العثور على زر btn-main، قد يكون الرابط تخطى تلقائياً أو تغيرت الصفحة")
 
-    client = cc_requests.Session()
-    client.headers.update({
-        'authority': 'ouo.io',
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'accept-language': 'en-US,en;q=0.9',
-        'cache-control': 'no-cache',
-        'referer': 'https://google.com/',
-        'upgrade-insecure-requests': '1',
-    })
+        # الانتظار للخطوة الثانية (زر Get Link)
+        time.sleep(2) # انتظار بسيط للتأكد من تحميل الصفحة التالية
+        logger.info("في انتظار زر Get Link...")
+        
+        btn_go = wait.until(EC.element_to_be_clickable((By.ID, "btn-main")))
+        driver.execute_script("arguments[0].click();", btn_go)
+        
+        # الانتظار حتى يتغير الرابط إلى الرابط النهائي
+        time.sleep(2)
+        final_url = driver.current_url
+        
+        if "ouo.io" in final_url or "ouo.press" in final_url:
+            # إذا ما زال الرابط هو نفسه، قد يكون هناك توجيه لم يكتمل
+            logger.info(f"الرابط الحالي هو {final_url}، جاري فحص العنوان النهائي...")
+            # في بعض الحالات الرابط النهائي يظهر في الـ URL مباشرة بعد الضغط
+            
+        logger.info(f"تم التخطي بنجاح! الرابط النهائي: {final_url}")
+        return final_url
 
-    logger.info(f"إرسال الطلب الأول إلى: {tempurl}")
-    res = client.get(
-        tempurl,
-        impersonate="chrome120",
-        allow_redirects=False
-    )
-
-    if res.headers.get("Location"):
-        logger.info(f"تم العثور على توجيه مباشر: {res.headers.get('Location')}")
-        return res.headers.get("Location")
-
-    next_url = f"{parsed.scheme}://{parsed.hostname}/go/{link_id}"
-
-    for step in range(2):
-        logger.info(f"الخطوة {step + 1}: تحليل الصفحة للبحث عن النموذج (Form)...")
-        soup = BeautifulSoup(res.content, 'html.parser')
-        form = soup.find("form")
-
-        if not form:
-            logger.error(f"لم يتم العثور على نموذج. أول 500 حرف من الصفحة: {res.text[:500]}")
-            raise Exception("لم يتم العثور على نموذج (قد يكون الرابط محظوراً من السيرفر أو تغيرت بنية الموقع)")
-
-        inputs = form.find_all("input", {"name": re.compile(r"token$")})
-        data = {i.get('name'): i.get('value') for i in inputs}
-        logger.info("تم سحب بيانات النموذج، جاري جلب توكن الكابتشا...")
-
-        data['x-token'] = RecaptchaV3()
-        headers = {'content-type': 'application/x-www-form-urlencoded'}
-
-        logger.info(f"إرسال طلب POST إلى: {next_url}")
-        res = client.post(
-            next_url,
-            data=data,
-            headers=headers,
-            allow_redirects=False,
-            impersonate="chrome120"
-        )
-
-        if res.headers.get("Location"):
-            logger.info("تم التخطي بنجاح!")
-            break
-
-        next_url = f"{parsed.scheme}://{parsed.hostname}/xreallcygo/{link_id}"
-
-    return res.headers.get("Location")
+    except Exception as e:
+        logger.exception("حدث خطأ أثناء محاكاة المتصفح:")
+        raise e
+    finally:
+        driver.quit()
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
     result = None
     error = None
-    
     if request.method == 'POST':
         url = request.form.get('url')
-        if url and (url.startswith('http://') or url.startswith('https://')):
+        if url and 'ouo' in url:
             try:
-                bypassed_link = ouo_bypass(url)
-                if bypassed_link:
-                    result = bypassed_link
-                else:
-                    error = "لم نتمكن من تخطي الرابط. (لا يوجد توجيه Location)"
-                    logger.warning(f"فشل التخطي للرابط {url} - لم يتم إرجاع رابط وجهة.")
+                result = ouo_bypass(url)
             except Exception as e:
-                logger.exception(f"حدث خطأ أثناء معالجة الرابط {url}:")
-                error = "حدث خطأ: " + str(e)
+                error = f"فشل التخطي: {str(e)}"
         else:
-            error = "الرجاء إدخال رابط صحيح يبدأ بـ http أو https"
+            error = "الرجاء إدخال رابط OUO صحيح"
             
     return render_template('index.html', result=result, error=error)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # هيروكو يحدد بورت تلقائي، نستخدم 5000 محلياً
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
 
